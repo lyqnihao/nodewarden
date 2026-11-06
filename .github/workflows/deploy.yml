@@ -1,0 +1,119 @@
+# NodeWarden — GitHub Actions 自动部署到 Cloudflare Workers
+# 版本历史（追加记录，请勿删除旧行）
+#   v1.0.0  初始版本：push main / 手动触发；自动预置 D1/R2/KV；JWT_SECRET 随版本上传；未配置 Secrets 时跳过部署
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".github/ISSUE_TEMPLATE/**"
+  workflow_dispatch:
+    inputs:
+      storage_mode:
+        description: "附件存储模式（r2 需绑卡，kv 免绑卡）"
+        required: true
+        default: r2
+        type: choice
+        options:
+          - r2
+          - kv
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-workers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: 检查部署凭据
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: 校验必需的 Secrets
+        id: check
+        shell: bash
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          JWT_SECRET_VALUE: ${{ secrets.JWT_SECRET }}
+        run: |
+          missing=()
+          [ -z "$CF_API_TOKEN" ] && missing+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$CF_ACCOUNT_ID" ] && missing+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -z "$JWT_SECRET_VALUE" ] && missing+=("JWT_SECRET")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::notice::跳过部署，尚未配置 Secrets: ${missing[*]}"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: 构建并部署
+    needs: precheck
+    if: needs.precheck.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      STORAGE_MODE: ${{ inputs.storage_mode || vars.STORAGE_MODE || 'r2' }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: 安装 Node.js（读取 .node-version）
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 构建前端资源
+        run: npm run build
+
+      - name: 校验 Cloudflare 账号与 API Token
+        run: npx wrangler whoami
+
+      - name: 预置 D1 / R2 / KV 并生成部署配置
+        run: node scripts/ci-provision.mjs
+
+      - name: 生成运行时密钥文件
+        shell: bash
+        env:
+          JWT_SECRET_VALUE: ${{ secrets.JWT_SECRET }}
+        run: |
+          node -e 'const fs=require("node:fs"); const v=process.env.JWT_SECRET_VALUE; if(!v||v.length<32){console.error("JWT_SECRET 长度必须 >= 32 个字符");process.exit(1);} fs.writeFileSync(".ci-secrets.json", JSON.stringify({JWT_SECRET:v}), {mode:0o600}); console.log("已生成 .ci-secrets.json（内容不打印）");'
+
+      - name: 部署到 Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.ci.toml --secrets-file .ci-secrets.json --keep-vars
+
+      - name: 清理临时文件
+        if: always()
+        run: rm -f wrangler.ci.toml .ci-secrets.json
+
+      - name: 输出部署摘要
+        shell: bash
+        run: |
+          {
+            echo "### 部署完成"
+            echo ""
+            echo "- Worker 名称：\`nodewarden\`"
+            echo "- 附件存储模式：\`${STORAGE_MODE}\`"
+            echo "- 触发提交：\`${GITHUB_SHA::8}\`"
+            echo ""
+            echo "访问地址：\`https://nodewarden.<你的子域>.workers.dev\`（以 Cloudflare 控制台显示为准）"
+          } >> "$GITHUB_STEP_SUMMARY"

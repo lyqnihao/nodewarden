@@ -5,6 +5,10 @@ node_modules/
 .wrangler/
 .dev.vars
 wrangler.my.toml
+
+# CI 自动部署生成的临时文件（含账号资源 ID 与运行时密钥，禁止提交）
+wrangler.ci.toml
+.ci-secrets.json
 RELEASE_NOTES.md
 tests/selfcheck.ts
 problem.md
