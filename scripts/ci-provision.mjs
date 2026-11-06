@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * NodeWarden CI provisioning helper (v1.0.0)
+ * NodeWarden CI provisioning helper (v1.0.1)
  * ------------------------------------------------------------------
  * GitHub Actions 专用：在全新 Cloudflare 账号上幂等地创建部署所需资源，
  * 并生成一份带资源 ID 的 wrangler.ci.toml（不改动仓库内的原始配置）。

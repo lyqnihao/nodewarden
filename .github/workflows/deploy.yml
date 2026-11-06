@@ -1,6 +1,8 @@
 # NodeWarden — GitHub Actions 自动部署到 Cloudflare Workers
 # 版本历史（追加记录，请勿删除旧行）
 #   v1.0.0  初始版本：push main / 手动触发；自动预置 D1/R2/KV；JWT_SECRET 随版本上传；未配置 Secrets 时跳过部署
+#   v1.0.1  修复：workflow_dispatch 默认 r2 会覆盖仓库变量 STORAGE_MODE=kv；改为 auto/r2/kv 三选项，
+#            默认 auto 跟随仓库变量；新增「打印本次部署参数」步骤，便于在 Actions 日志核对存储模式
 name: Deploy to Cloudflare Workers
 
 on:
@@ -12,11 +14,12 @@ on:
   workflow_dispatch:
     inputs:
       storage_mode:
-        description: "附件存储模式（r2 需绑卡，kv 免绑卡）"
+        description: "附件存储模式：auto 跟随仓库变量 STORAGE_MODE；r2 需绑卡；kv 免绑卡"
         required: true
-        default: r2
+        default: auto
         type: choice
         options:
+          - auto
           - r2
           - kv
 
@@ -62,7 +65,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      STORAGE_MODE: ${{ inputs.storage_mode || vars.STORAGE_MODE || 'r2' }}
+      STORAGE_MODE: ${{ (inputs.storage_mode && inputs.storage_mode != 'auto' && inputs.storage_mode) || vars.STORAGE_MODE || 'r2' }}
     steps:
       - name: 检出代码
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -80,6 +83,9 @@ jobs:
 
       - name: 构建前端资源
         run: npm run build
+
+      - name: 打印本次部署参数
+        run: echo "STORAGE_MODE=${STORAGE_MODE}"
 
       - name: 校验 Cloudflare 账号与 API Token
         run: npx wrangler whoami
